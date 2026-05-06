@@ -151,6 +151,108 @@ static void double_box(int x, int y, int w, int h, int fg, const char *title)
     }
 }
 
+/* ============== Responsive Layout Helpers ==============
+
+   Reference layout was designed at ~1440p / 100% scaling (terminal roughly
+   200x60+ cells). Smaller terminals (e.g. 1080p / 150% scaling, often
+   ~120-150x35-45) need everything to scale.
+
+   Strategy: keep the reference numbers when there's room, shrink/drop pieces
+   in priority order when space is tight, refuse to render below a hard floor. */
+
+#define LAYOUT_MIN_W 60
+#define LAYOUT_MIN_H 14
+
+/* Reference values (the "looks identical at 1440p" baseline). */
+#define REF_QUEUE_W       38
+#define REF_ART_W         64
+#define REF_ART_H         32
+#define REF_ART_W_SMALL   32
+#define REF_ART_H_SMALL   16
+#define REF_ART_LEFT_PAD  16
+#define REF_HYBRID_LEFT_W 44
+
+/* Pick a queue sidebar width that fits W, or 0 if there isn't room.
+   Returns 0 when sidebar is hidden or W is too narrow to host one. */
+static int responsive_queue_w(int W, bool visible)
+{
+    if (!visible) return 0;
+    int q = REF_QUEUE_W;
+    /* Cap to a third of the screen so the main area always dominates. */
+    if (q > W / 3) q = W / 3;
+    /* If we can't even fit a usable 22-col queue, drop the sidebar. */
+    if (q < 22) return 0;
+    return q;
+}
+
+/* Pick album-art dimensions that fit the given inner panel.
+   Falls back to the 32x16 small art, then to no art (returns 0,0).
+   *use_small is set true when the small variant should be used. */
+static void responsive_art_size(int avail_w, int avail_h, int min_text_w,
+                                int *art_w, int *art_h, bool *use_small)
+{
+    *use_small = false;
+    /* Try full 64x32: needs 64 cols + min_text_w + a couple of gaps + indent. */
+    if (avail_w >= REF_ART_W + min_text_w + 6 && avail_h >= REF_ART_H) {
+        *art_w = REF_ART_W; *art_h = REF_ART_H; return;
+    }
+    /* Fall back to 32x16. */
+    if (avail_w >= REF_ART_W_SMALL + min_text_w + 4 && avail_h >= REF_ART_H_SMALL) {
+        *art_w = REF_ART_W_SMALL; *art_h = REF_ART_H_SMALL;
+        *use_small = true; return;
+    }
+    /* No room for art at all. */
+    *art_w = 0; *art_h = 0;
+}
+
+/* Render a centered "terminal too small" message and exit early. */
+static void render_too_small(int W, int H)
+{
+    tui_set_color_idx(C_TEXT, C_BG);
+    tui_set_attr(ATTR_BOLD);
+    const char *msg = "Terminal too small — please resize";
+    int len = (int)strlen(msg);
+    int x = (W - len) / 2;
+    int y = H / 2;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    tui_cursor_move(x, y);
+    tui_write(msg);
+    tui_reset_style();
+}
+
+/* Render three centered lines (name, artist, album) inside [x, x+w). */
+static void render_centered_track_info(int x, int y, int w, player_state_t *state)
+{
+    if (w < 4) return;
+    char buf[512];
+    const char *name   = state->current_track.name[0]   ? state->current_track.name   : "— No Track —";
+    const char *artist = state->current_track.artist[0] ? state->current_track.artist : "—";
+    const char *album  = state->current_track.album[0]  ? state->current_track.album  : "";
+
+    truncate_to(buf, sizeof(buf), name, w);
+    int lw = (int)strlen(buf);
+    tui_cursor_move(x + (w - lw) / 2, y);
+    tui_set_color_idx(C_TEXT, C_BG);
+    tui_set_attr(ATTR_BOLD);
+    tui_write(buf);
+
+    truncate_to(buf, sizeof(buf), artist, w);
+    lw = (int)strlen(buf);
+    tui_cursor_move(x + (w - lw) / 2, y + 1);
+    tui_set_color_idx(C_ARTIST, C_BG);
+    tui_set_attr(ATTR_NORMAL);
+    tui_write(buf);
+
+    truncate_to(buf, sizeof(buf), album, w);
+    lw = (int)strlen(buf);
+    tui_cursor_move(x + (w - lw) / 2, y + 2);
+    tui_set_color_idx(C_ALBUM, C_BG);
+    tui_write(buf);
+
+    tui_reset_style();
+}
+
 /* ============== Top Bar ============== */
 
 static void render_top_bar(player_state_t *state, int width)
@@ -161,33 +263,45 @@ static void render_top_bar(player_state_t *state, int width)
     tui_cursor_move(0, 0);
     for (int i = 0; i < width; i++) tui_write(" ");
 
-    /* Logo and title */
+    /* Logo: full on wide bars, shortened to "♫" only when very narrow. */
     tui_cursor_move(2, 0);
     tui_set_color_idx(C_TEXT, C_ACCENT_DIM);
-    tui_write("♫ SpotiCLI");
+    const char *logo = (width >= 30) ? "♫ SpotiCLI" : "♫";
+    tui_write(logo);
+    int logo_end = 2 + (int)strlen(logo);
 
-    /* Mode indicator */
+    /* Playback icon (always shown, just past the logo). */
     tui_set_attr(ATTR_NORMAL);
-    const char *mode = state->display_mode == MODE_ALBUM_ART ? "Album" :
-                       state->display_mode == MODE_HYBRID    ? "Hybrid" : "Lyrics";
-    tui_cursor_move(14, 0);
-    tui_write(" • ");
-
-    /* Playback status */
     const char *icon = state->playback_state == PLAYBACK_STATE_PLAYING ? "▶" :
                        state->playback_state == PLAYBACK_STATE_PAUSED  ? "⏸" : "⏹";
-    tui_write(icon);
+    if (width >= 22) {
+        tui_cursor_move(logo_end + 2, 0);
+        tui_write("• ");
+        tui_write(icon);
+    }
 
-    /* Right side info */
+    /* Right-side status. Drop pieces as width shrinks so it never collides
+       with the logo/icon on the left. */
     char status[64];
-    snprintf(status, sizeof(status), "Vol %d%% %s%s",
-             state->volume,
-             state->shuffle_enabled ? "⇄" : "  ",
-             state->repeat_mode == REPEAT_OFF ? "  " :
-             state->repeat_mode == REPEAT_ALL ? "↻" : "↻¹");
+    if (width >= 50) {
+        snprintf(status, sizeof(status), "Vol %d%% %s%s",
+                 state->volume,
+                 state->shuffle_enabled ? "⇄" : "  ",
+                 state->repeat_mode == REPEAT_OFF ? "  " :
+                 state->repeat_mode == REPEAT_ALL ? "↻" : "↻¹");
+    } else if (width >= 30) {
+        snprintf(status, sizeof(status), "Vol %d%%", state->volume);
+    } else {
+        status[0] = 0;
+    }
 
-    tui_cursor_move(width - (int)strlen(status) - 2, 0);
-    tui_write(status);
+    if (status[0]) {
+        int sx = width - (int)strlen(status) - 2;
+        if (sx > logo_end + 6) {
+            tui_cursor_move(sx, 0);
+            tui_write(status);
+        }
+    }
 
     tui_reset_style();
 }
@@ -284,11 +398,22 @@ static void render_track_block(int x, int y, int width, player_state_t *state)
 
 static void render_help_bar(int y, int width)
 {
-    (void)width;
+    /* Pick the longest help string that fits, shortest as fallback. */
+    const char *full   = " [Space] Play/Pause  [N/P] Next/Prev  [1/2/3] Mode  [Q] Queue  [+/-] Vol  [Esc] Quit ";
+    const char *medium = " [Space] Play  [N/P] Skip  [1/2/3] Mode  [Q] Queue  [+/-] Vol  [Esc] Quit ";
+    const char *small  = " [Spc] Play  [N/P] Skip  [1/2/3] Mode  [Q] Queue  [Esc] Quit ";
+    const char *tiny   = " [Spc] [N/P] [1/2/3] [Q] [Esc] ";
+
+    const char *pick = full;
+    if ((int)strlen(full) + 2 > width)   pick = medium;
+    if ((int)strlen(medium) + 2 > width) pick = small;
+    if ((int)strlen(small) + 2 > width)  pick = tiny;
+    if ((int)strlen(tiny) + 2 > width)   return;
+
     tui_set_color_idx(C_TEXT_FAINT, C_BG);
     tui_set_attr(ATTR_NORMAL);
     tui_cursor_move(1, y);
-    tui_write(" [Space] Play/Pause  [N/P] Next/Prev  [1/2/3] Mode  [Q] Queue  [+/-] Vol  [Esc] Quit ");
+    tui_write(pick);
     tui_reset_style();
 }
 
@@ -426,6 +551,55 @@ static void render_queue_panel(int x, int y, int w, int h, player_state_t *state
 
 /* ============== Lyrics Panel ============== */
 
+/* Word-wrap one lyric line into segments. UTF-8 safe (won't split a
+   multibyte sequence). Prefers breaking on spaces; falls back to a hard
+   break if no space fits. Returns the segment count written. */
+static int wrap_lyric_into(const char *src, int max_cols,
+                           char segs[][384], int seg_capacity)
+{
+    int n = 0;
+    if (!src || !*src) {
+        if (n < seg_capacity) { segs[n][0] = 0; n++; }
+        return n;
+    }
+    if (max_cols < 1) max_cols = 1;
+
+    int len = (int)strlen(src);
+    int i = 0;
+    while (i < len && n < seg_capacity) {
+        int remain = len - i;
+        if (remain <= max_cols) {
+            int copy = remain;
+            if (copy > 383) copy = 383;
+            memcpy(segs[n], src + i, copy);
+            segs[n][copy] = 0;
+            n++;
+            break;
+        }
+        int seg_end = i + max_cols;
+        /* Back up out of any UTF-8 continuation bytes. */
+        while (seg_end > i &&
+               (unsigned char)src[seg_end] >= 0x80 &&
+               (unsigned char)src[seg_end] < 0xC0) {
+            seg_end--;
+        }
+        /* Prefer the last space inside [i+1, seg_end]. */
+        int brk = -1;
+        for (int j = seg_end; j > i; j--) {
+            if (src[j] == ' ') { brk = j; break; }
+        }
+        int end = brk > 0 ? brk : seg_end;
+        int copy = end - i;
+        if (copy > 383) copy = 383;
+        memcpy(segs[n], src + i, copy);
+        segs[n][copy] = 0;
+        n++;
+        i = end;
+        if (brk > 0) i++;  /* consume the space */
+    }
+    return n;
+}
+
 static void render_lyrics_panel(int x, int y, int w, int h, player_state_t *state)
 {
     rounded_box(x, y, w, h, C_BORDER, "Lyrics");
@@ -447,23 +621,50 @@ static void render_lyrics_panel(int x, int y, int w, int h, player_state_t *stat
     int center = rows / 2;
     int cur = state->current_lyric_index;
 
-    char line[512];
-    for (int row = 0; row < rows; row++) {
-        int li = cur + (row - center);
-        if (li < 0 || li >= state->lyrics_count) continue;
+    /* Build a flat list of wrapped rows around the current lyric, then
+       align so the first wrapped row of `cur` lands on `center`. */
+    enum { ROW_CAP = 96, WIN = 12, SEG_CAP = 24 };
+    static char rows_text[ROW_CAP][384];
+    static int  rows_li[ROW_CAP];
+    int nrows = 0;
+    int cur_row_idx = -1;
 
-        int dist = abs(row - center);
+    int start_li = cur - WIN; if (start_li < 0) start_li = 0;
+    int end_li   = cur + WIN + 1;
+    if (end_li > state->lyrics_count) end_li = state->lyrics_count;
+
+    char segs[SEG_CAP][384];
+    for (int li = start_li; li < end_li && nrows < ROW_CAP; li++) {
+        int nseg = wrap_lyric_into(state->lyrics[li].text, inner_w, segs, SEG_CAP);
+        for (int s = 0; s < nseg && nrows < ROW_CAP; s++) {
+            if (li == cur && cur_row_idx < 0) cur_row_idx = nrows;
+            rows_li[nrows] = li;
+            size_t sl = strlen(segs[s]);
+            if (sl > sizeof(rows_text[nrows]) - 1) sl = sizeof(rows_text[nrows]) - 1;
+            memcpy(rows_text[nrows], segs[s], sl);
+            rows_text[nrows][sl] = 0;
+            nrows++;
+        }
+    }
+    if (cur_row_idx < 0) cur_row_idx = 0;
+
+    for (int row = 0; row < rows; row++) {
+        int idx = cur_row_idx + (row - center);
+        if (idx < 0 || idx >= nrows) continue;
+
+        int li = rows_li[idx];
+        int dist = li - cur; if (dist < 0) dist = -dist;
         int fg = dist == 0 ? C_LYRICS_CUR : dist == 1 ? C_LYRICS_NEXT : C_LYRICS_PREV;
         uint8_t attr = dist == 0 ? ATTR_BOLD : dist == 1 ? ATTR_NORMAL : ATTR_DIM;
 
-        truncate_to(line, sizeof(line), state->lyrics[li].text, inner_w);
-        int pad = (inner_w - (int)strlen(line)) / 2;
+        const char *text = rows_text[idx];
+        int pad = (inner_w - (int)strlen(text)) / 2;
         if (pad < 0) pad = 0;
 
         tui_cursor_move(inner_x + pad, inner_y + row);
         tui_set_color_idx(fg, C_BG);
         tui_set_attr(attr);
-        tui_write(line);
+        tui_write(text);
     }
     tui_reset_style();
 }
@@ -473,198 +674,272 @@ static void render_lyrics_panel(int x, int y, int w, int h, player_state_t *stat
 void mode_render_album(mode_renderer_t *r, player_state_t *state)
 {
     int W = r->screen_width, H = r->screen_height;
+
+    if (W < LAYOUT_MIN_W || H < LAYOUT_MIN_H) {
+        render_too_small(W, H);
+        return;
+    }
+
     render_top_bar(state, W);
 
-    int q_w = state->queue_sidebar_visible ? 38 : 0;
+    int q_w = responsive_queue_w(W, state->queue_sidebar_visible);
     int main_w = W - q_w;
 
-    /* One unified main panel containing album art (left) + track info (right).
-       Progress bar lives outside any box near the bottom, with a gap above and
-       below it before the help bar. */
+    /* Reserve rows: top bar (0), blank (1), panel, blank, progress (H-3),
+       blank, help (H-1). Below that, drop the help bar then the progress
+       gaps to keep the panel usable. */
     int panel_x = 1;
     int panel_y = 2;
     int panel_w = main_w - 2;
-    /* Layout: top bar (row 1), panel, blank, progress (H-3), blank, help (H-1). */
     int panel_h = H - 6;
-    if (panel_h < 34) panel_h = 34;
+    if (panel_h < 8) panel_h = H - 4;   /* drop help bar gap */
+    if (panel_h < 6) panel_h = H - 3;
+    if (panel_h < 4) panel_h = 4;
 
     double_box(panel_x, panel_y, panel_w, panel_h, C_BORDER_HI, "♪ SpotiCLI");
 
-    /* Album art on the left, deeply indented. The helper applies an internal
-       2-col indent; we add more here so the art sits well inside the panel. */
-    const int ART_LEFT_PAD = 16;
-    int art_x = panel_x + 1 + ART_LEFT_PAD;
-    int art_box_w = 64;
-    draw_album_art_string(art_x - 2, panel_y + 1, art_box_w + 4, panel_h - 2, state->album_ascii);
+    /* Decide art size based on what fits. min_text_w reserves room for the
+       track-info column to the art's right. */
+    int inner_w = panel_w - 2;
+    int inner_h = panel_h - 2;
+    int min_text_w = 18;
+    int art_w = 0, art_h = 0;
+    bool use_small = false;
+    responsive_art_size(inner_w, inner_h, min_text_w, &art_w, &art_h, &use_small);
 
-    /* Track info: centered horizontally between the art's right edge and the
-       panel's right border, vertically centered. */
-    int art_right = art_x + art_box_w;       /* first column past the art */
-    int region_left = art_right + 2;          /* small breathing room */
-    int region_right = panel_x + panel_w - 2; /* one in from the right border */
+    /* Indent the art from the panel's left edge. The reference look (1440p,
+       64-col art, 16-col indent) puts the indent at exactly art_w/4, so we
+       scale the same way — that keeps the same visual proportion when the
+       art falls back to 32×16 (indent 8) or smaller. Then clamp so the
+       indent never grows past the reference, never collapses below 2, and
+       always leaves at least min_text_w for the track info column. */
+    int art_left_pad = (art_w > 0) ? art_w / 4 : REF_ART_LEFT_PAD;
+    if (art_left_pad > REF_ART_LEFT_PAD) art_left_pad = REF_ART_LEFT_PAD;
+    int max_pad = (inner_w - art_w - min_text_w) / 2;
+    if (max_pad < 0) max_pad = 0;
+    if (art_left_pad > max_pad) art_left_pad = max_pad;
+    if (art_left_pad < 2) art_left_pad = 2;
+
+    int art_x = panel_x + 1 + art_left_pad;
+
+    if (art_w > 0) {
+        const char *art = use_small && state->album_ascii_small[0]
+            ? state->album_ascii_small
+            : state->album_ascii;
+        int art_y = panel_y + 1 + (inner_h - art_h) / 2;
+        if (art_y < panel_y + 1) art_y = panel_y + 1;
+        draw_album_art_string(art_x - 2, art_y, art_w + 4, art_h, art);
+    }
+
+    /* Track info region: to the right of the art, or full-width if no art. */
+    int region_left = (art_w > 0) ? art_x + art_w + 2 : panel_x + 2;
+    int region_right = panel_x + panel_w - 2;
     int region_w = region_right - region_left;
     if (region_w > 4) {
-        char buf[512];
-        int info_y = panel_y + 1 + ((panel_h - 2) - 3) / 2;
-
-        const char *name   = state->current_track.name[0]   ? state->current_track.name   : "— No Track —";
-        const char *artist = state->current_track.artist[0] ? state->current_track.artist : "—";
-        const char *album  = state->current_track.album[0]  ? state->current_track.album  : "";
-
-        /* Render each line individually so each is centered against its own width. */
-        truncate_to(buf, sizeof(buf), name, region_w);
-        int lw = (int)strlen(buf);
-        tui_cursor_move(region_left + (region_w - lw) / 2, info_y);
-        tui_set_color_idx(C_TEXT, C_BG);
-        tui_set_attr(ATTR_BOLD);
-        tui_write(buf);
-
-        truncate_to(buf, sizeof(buf), artist, region_w);
-        lw = (int)strlen(buf);
-        tui_cursor_move(region_left + (region_w - lw) / 2, info_y + 1);
-        tui_set_color_idx(C_ARTIST, C_BG);
-        tui_set_attr(ATTR_NORMAL);
-        tui_write(buf);
-
-        truncate_to(buf, sizeof(buf), album, region_w);
-        lw = (int)strlen(buf);
-        tui_cursor_move(region_left + (region_w - lw) / 2, info_y + 2);
-        tui_set_color_idx(C_ALBUM, C_BG);
-        tui_write(buf);
-
-        tui_reset_style();
+        int info_y = panel_y + 1 + (inner_h - 3) / 2;
+        render_centered_track_info(region_left, info_y, region_w, state);
     }
 
-    if (state->queue_sidebar_visible) {
-        render_queue_panel(main_w, 2, q_w - 1, H - 6, state);
+    if (q_w > 0) {
+        render_queue_panel(main_w, 2, q_w - 1, panel_h, state);
     }
 
-    /* Full-width progress bar, no box, with empty rows above and below. */
-    render_progress(2, H - 3, W - 4, state);
-
-    render_help_bar(H - 1, W);
+    /* Full-width progress bar, no box, with empty rows above and below.
+       Skip if there isn't enough vertical room. */
+    if (H >= 6) render_progress(2, H - 3, W - 4, state);
+    if (H >= 4) render_help_bar(H - 1, W);
 }
 
 void mode_render_hybrid(mode_renderer_t *r, player_state_t *state)
 {
     int W = r->screen_width, H = r->screen_height;
+
+    if (W < LAYOUT_MIN_W || H < LAYOUT_MIN_H) {
+        render_too_small(W, H);
+        return;
+    }
+
     render_top_bar(state, W);
 
-    int q_w = state->queue_sidebar_visible ? 38 : 0;
+    int q_w = responsive_queue_w(W, state->queue_sidebar_visible);
     int main_w = W - q_w;
 
-    /* Three side-by-side panels above the bottom progress bar:
-       [ left: 32x16 art + track info ] [ middle: lyrics ] [ right: queue ]
-       Progress bar lives outside the boxes (same as album mode). */
     int panel_y = 2;
-    int panel_h = H - 6;        /* leaves: blank, progress (H-3), blank, help (H-1) */
-    if (panel_h < 20) panel_h = 20;
+    int panel_h = H - 6;
+    if (panel_h < 8) panel_h = H - 4;
+    if (panel_h < 6) panel_h = H - 3;
+    if (panel_h < 4) panel_h = 4;
 
-    /* Left panel: just wide enough to comfortably hold the 32-col art with padding. */
-    int left_w = 44;
-    if (left_w > main_w - 30) left_w = main_w / 2;
+    /* Left panel: 44 cols (reference) when there's room, otherwise scale down.
+       Need enough room for a meaningful lyrics column to the right (>= 24). */
+    int left_w = REF_HYBRID_LEFT_W;
+    int min_lyrics_w = 24;
+    if (left_w > main_w - min_lyrics_w - 2) left_w = main_w - min_lyrics_w - 2;
+    if (left_w < 20) left_w = (main_w >= 40) ? main_w / 2 : main_w - 2;
+    if (left_w < 12) left_w = main_w - 2;  /* lyrics drops out below */
     int left_x = 1;
 
-    /* Middle (lyrics) fills the remaining main width. */
     int mid_x = left_x + left_w + 1;
     int mid_w = main_w - mid_x - 1;
 
-    /* === Left panel: 32x16 art + track info, group vertically centered === */
+    /* === Left panel: art + track info, group vertically centered === */
     double_box(left_x, panel_y, left_w, panel_h, C_BORDER_HI, "♪ SpotiCLI");
 
     {
-        const int ART_ROWS  = 16;
-        const int ART_COLS  = 32;
-        const int GAP       = 2;     /* blank rows between art and track text */
-        const int TEXT_ROWS = 3;     /* name / artist / album */
-        int total_rows = ART_ROWS + GAP + TEXT_ROWS;
+        const int GAP       = 2;
+        const int TEXT_ROWS = 3;
 
         int inner_h = panel_h - 2;
         int inner_w = left_w - 2;
+
+        /* Pick art size that fits the left panel inner width and leaves room
+           for the 3-line track text plus a gap. */
+        int avail_h_for_art = inner_h - TEXT_ROWS - GAP;
+        if (avail_h_for_art < 0) avail_h_for_art = 0;
+
+        int art_w = 0, art_h = 0;
+        if (inner_w >= REF_ART_W_SMALL && avail_h_for_art >= REF_ART_H_SMALL) {
+            art_w = REF_ART_W_SMALL; art_h = REF_ART_H_SMALL;
+        } else if (inner_w >= 16 && avail_h_for_art >= 8) {
+            /* Half-size fallback for very tight panels. */
+            art_w = 16; art_h = 8;
+        }
+
+        int total_rows = art_h + (art_h > 0 ? GAP : 0) + TEXT_ROWS;
         int top_pad = (inner_h - total_rows) / 2;
         if (top_pad < 0) top_pad = 0;
 
         int group_y = panel_y + 1 + top_pad;
+        int text_y = group_y + (art_h > 0 ? art_h + GAP : 0);
 
-        /* Center the 32-col art horizontally within the panel. */
-        int art_left = left_x + 1 + (inner_w - ART_COLS) / 2;
-        if (art_left < left_x + 1) art_left = left_x + 1;
+        if (art_w > 0) {
+            int art_left = left_x + 1 + (inner_w - art_w) / 2;
+            if (art_left < left_x + 1) art_left = left_x + 1;
 
-        const char *small = state->album_ascii_small[0]
-            ? state->album_ascii_small : state->album_ascii;
-        /* draw_album_art_string applies an internal 2-col indent; cancel it so
-           the art lands exactly at art_left and the side gaps stay equal. */
-        draw_album_art_string(art_left - 2, group_y, ART_COLS, ART_ROWS, small);
+            const char *art = state->album_ascii_small[0]
+                ? state->album_ascii_small : state->album_ascii;
+            draw_album_art_string(art_left - 2, group_y, art_w, art_h, art);
+        }
 
-        /* Track text under the art, each line centered against panel inner width. */
-        int text_y = group_y + ART_ROWS + GAP;
-        int region_left = left_x + 1;
-        int region_w = inner_w;
-
-        char buf[512];
-        const char *name   = state->current_track.name[0]   ? state->current_track.name   : "— No Track —";
-        const char *artist = state->current_track.artist[0] ? state->current_track.artist : "—";
-        const char *album  = state->current_track.album[0]  ? state->current_track.album  : "";
-
-        truncate_to(buf, sizeof(buf), name, region_w);
-        int lw = (int)strlen(buf);
-        tui_cursor_move(region_left + (region_w - lw) / 2, text_y);
-        tui_set_color_idx(C_TEXT, C_BG);
-        tui_set_attr(ATTR_BOLD);
-        tui_write(buf);
-
-        truncate_to(buf, sizeof(buf), artist, region_w);
-        lw = (int)strlen(buf);
-        tui_cursor_move(region_left + (region_w - lw) / 2, text_y + 1);
-        tui_set_color_idx(C_ARTIST, C_BG);
-        tui_set_attr(ATTR_NORMAL);
-        tui_write(buf);
-
-        truncate_to(buf, sizeof(buf), album, region_w);
-        lw = (int)strlen(buf);
-        tui_cursor_move(region_left + (region_w - lw) / 2, text_y + 2);
-        tui_set_color_idx(C_ALBUM, C_BG);
-        tui_write(buf);
-
-        tui_reset_style();
+        if (text_y + TEXT_ROWS <= panel_y + panel_h - 1) {
+            render_centered_track_info(left_x + 1, text_y, inner_w, state);
+        }
     }
 
-    /* === Middle panel: lyrics === */
+    /* === Middle panel: lyrics — only if there's actual room === */
     if (mid_w > 10) {
         render_lyrics_panel(mid_x, panel_y, mid_w, panel_h, state);
     }
 
-    /* === Right panel: queue (unchanged) === */
-    if (state->queue_sidebar_visible) {
+    /* === Right panel: queue === */
+    if (q_w > 0) {
         render_queue_panel(main_w, 2, q_w - 1, panel_h, state);
     }
 
-    /* Full-width progress bar, no box, with empty rows above and below. */
-    render_progress(2, H - 3, W - 4, state);
+    if (H >= 6) render_progress(2, H - 3, W - 4, state);
+    if (H >= 4) render_help_bar(H - 1, W);
+}
 
-    render_help_bar(H - 1, W);
+/* Render the bottom strip used by lyrics mode: a 10×5 album-art thumbnail
+   immediately followed by a centered "name - artist - album" line. The art
+   and the text together are centered as one block within [x, x+width). */
+static void render_lyrics_bottom_strip(int x, int y, int width, player_state_t *state)
+{
+    const int ART_W = 10;
+    const int ART_H = 5;
+    const int GAP   = 2;
+
+    /* Build the combined "name - artist - album" string. */
+    char info[1024];
+    const char *name   = state->current_track.name[0]   ? state->current_track.name   : "— No Track —";
+    const char *artist = state->current_track.artist[0] ? state->current_track.artist : "—";
+    const char *album  = state->current_track.album[0]  ? state->current_track.album  : "";
+    if (album[0]) {
+        snprintf(info, sizeof(info), "%s - %s - %s", name, artist, album);
+    } else {
+        snprintf(info, sizeof(info), "%s - %s", name, artist);
+    }
+
+    int max_text_w = width - ART_W - GAP - 2;
+    if (max_text_w < 8) max_text_w = 8;
+
+    char info_trunc[1024];
+    truncate_to(info_trunc, sizeof(info_trunc), info, max_text_w);
+    int text_len = (int)strlen(info_trunc);
+
+    int block_w = ART_W + GAP + text_len;
+    int block_x = x + (width - block_w) / 2;
+    if (block_x < x) block_x = x;
+
+    /* Draw the tiny art (already includes ANSI color escapes per pixel). */
+    const char *art = state->album_ascii_tiny[0]
+        ? state->album_ascii_tiny
+        : state->album_ascii_small;
+    if (art && art[0]) {
+        draw_album_art_string(block_x - 2, y, ART_W + 4, ART_H, art);
+    }
+
+    /* Center the text vertically against the 5-row art (row index 2). */
+    int text_y = y + ART_H / 2;
+    tui_cursor_move(block_x + ART_W + GAP, text_y);
+    tui_set_color_idx(C_TEXT, C_BG);
+    tui_set_attr(ATTR_BOLD);
+    tui_write(info_trunc);
+    tui_reset_style();
 }
 
 void mode_render_lyrics(mode_renderer_t *r, player_state_t *state)
 {
     int W = r->screen_width, H = r->screen_height;
-    render_top_bar(state, W);
 
-    int q_w = state->queue_sidebar_visible ? 34 : 0;
-    int main_w = W - q_w;
-
-    int lyr_h = H - 12;
-    render_lyrics_panel(1, 2, main_w - 2, lyr_h, state);
-
-    if (state->queue_sidebar_visible) {
-        render_queue_panel(main_w, 2, q_w - 1, H - 5, state);
+    if (W < LAYOUT_MIN_W || H < LAYOUT_MIN_H) {
+        render_too_small(W, H);
+        return;
     }
 
-    int np_y = H - 9;
-    render_track_block(3, np_y + 1, main_w - 6, state);
-    render_progress(3, np_y + 5, main_w - 6, state);
+    render_top_bar(state, W);
 
-    render_help_bar(H - 1, W);
+    int q_w = responsive_queue_w(W, state->queue_sidebar_visible);
+    int main_w = W - q_w;
+
+    /* Layout (top to bottom):
+         row 0       : top bar
+         row 1       : blank
+         row 2       : lyrics panel start
+         ...         : lyrics panel (lyr_h rows)
+         row 2+lyr_h : blank
+         strip_y     : tiny art (5 rows) + centered "name - artist - album"
+         row H-3     : progress bar
+         row H-1     : help bar
+       Bottom reserve = 5 art rows + 1 blank above + 1 progress + 1 blank
+       above progress + 1 help + 1 gap = ~10. */
+    int bottom_reserve = 10;
+    int min_lyrics_h = 6;
+    while (bottom_reserve > 8 && H - bottom_reserve < min_lyrics_h + 2) bottom_reserve--;
+    if (bottom_reserve < 8) bottom_reserve = 8;
+
+    int lyr_h = H - bottom_reserve;
+    if (lyr_h < 4) lyr_h = 4;
+
+    render_lyrics_panel(1, 2, main_w - 2, lyr_h, state);
+
+    /* Queue panel matches the lyrics panel's height. */
+    if (q_w > 0) {
+        render_queue_panel(main_w, 2, q_w - 1, lyr_h, state);
+    }
+
+    /* Bottom strip: art + centered track info. Sits between the lyrics panel
+       and the progress bar. */
+    int progress_y = H - 3;
+    int strip_y = 2 + lyr_h + 1;
+    if (strip_y + 5 > progress_y - 1) strip_y = progress_y - 6;
+    if (strip_y < 2 + lyr_h) strip_y = 2 + lyr_h;
+
+    if (strip_y + 5 <= progress_y) {
+        render_lyrics_bottom_strip(2, strip_y, W - 4, state);
+    }
+    if (H >= 6) render_progress(3, progress_y, W - 6, state);
+    if (H >= 4) render_help_bar(H - 1, W);
 }
 
 /* Legacy API */
@@ -689,7 +964,9 @@ void mode_render(mode_renderer_t *r, player_state_t *state)
 {
     if (!r || !state) return;
 
-    lyrics_update_position(state, state->current_track.progress_ms);
+    /* progress_ms trails real playback by roughly the API round-trip,
+       so look ahead a bit when selecting the active lyric line. */
+    lyrics_update_position(state, state->current_track.progress_ms + 1000);
     tui_get_size(&r->screen_width, &r->screen_height);
 
     switch (state->display_mode) {

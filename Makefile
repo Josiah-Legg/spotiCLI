@@ -5,12 +5,17 @@ LDFLAGS = -lm
 ifeq ($(OS),Windows_NT)
 LDFLAGS += -lwinhttp -lws2_32 -lshlwapi -lshell32 -lole32
 EXE = .exe
-RM = rm -rf
-MKDIR = mkdir -p
+# Use cmd.exe builtins so it works whether make is invoked from cmd or a POSIX shell
+RM = if exist "$(subst /,\,$(1))" rmdir /S /Q "$(subst /,\,$(1))"
+RMFILE = if exist "$(subst /,\,$(1))" del /F /Q "$(subst /,\,$(1))"
+MKDIR = if not exist "$(subst /,\,$(1))" mkdir "$(subst /,\,$(1))"
+SHELL := cmd.exe
+.SHELLFLAGS := /C
 else
 EXE =
-RM = rm -rf
-MKDIR = mkdir -p
+RM = rm -rf "$(1)"
+RMFILE = rm -f "$(1)"
+MKDIR = mkdir -p "$(1)"
 endif
 
 SRC_DIR = src
@@ -42,20 +47,27 @@ TARGET = $(BIN_DIR)/spoticli$(EXE)
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
-	@echo "Linking $@..."
+	@echo Linking $@...
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-	@echo "Build complete: $@"
+	@echo Build complete: $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(HEADERS)
-	@$(MKDIR) $(BUILD_DIR)
-	@echo "Compiling $<..."
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(HEADERS) | $(BUILD_DIR)
+	@echo Compiling $<...
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR):
+	@$(call MKDIR,$(BUILD_DIR))
+
 clean:
-	@echo "Cleaning..."
-	@$(RM) $(BUILD_DIR) $(TARGET)
+	@echo Cleaning...
+	@$(call RM,$(BUILD_DIR))
+	@$(call RMFILE,$(TARGET))
 
 run: $(TARGET)
+ifeq ($(OS),Windows_NT)
+	$(subst /,\,$(TARGET))
+else
 	./$(TARGET)
+endif
 
 .PHONY: all clean run

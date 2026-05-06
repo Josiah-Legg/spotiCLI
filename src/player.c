@@ -50,15 +50,19 @@ static void *art_download_thread(void *arg)
     http_binary_response_t *bin = http_download_binary(args->cover_url, args->access_token);
     char *art_full = NULL;
     char *art_small = NULL;
+    char *art_tiny = NULL;
 
     if (bin && bin->data && bin->size > 0) {
         album_art_config_t *cfg_full  = album_art_config_create(args->art_w, true);
         album_art_config_t *cfg_small = album_art_config_create(32, true);
+        album_art_config_t *cfg_tiny  = album_art_config_create(10, true);
 
         uint8_t *img_full  = album_art_decode_resize(
             (const uint8_t *)bin->data, bin->size, args->art_w, args->art_h);
         uint8_t *img_small = album_art_decode_resize(
             (const uint8_t *)bin->data, bin->size, 32, 16);
+        uint8_t *img_tiny  = album_art_decode_resize(
+            (const uint8_t *)bin->data, bin->size, 10, 5);
 
         if (cfg_full && img_full) {
             art_full = album_art_convert(img_full, args->art_w, args->art_h, cfg_full);
@@ -66,11 +70,16 @@ static void *art_download_thread(void *arg)
         if (cfg_small && img_small) {
             art_small = album_art_convert(img_small, 32, 16, cfg_small);
         }
+        if (cfg_tiny && img_tiny) {
+            art_tiny = album_art_convert(img_tiny, 10, 5, cfg_tiny);
+        }
 
         free(img_full);
         free(img_small);
+        free(img_tiny);
         album_art_config_free(cfg_full);
         album_art_config_free(cfg_small);
+        album_art_config_free(cfg_tiny);
     }
     if (bin) http_binary_response_free(bin);
 
@@ -95,6 +104,14 @@ static void *art_download_thread(void *arg)
             args->state->pending_album_ascii_small[0] = '\0';
         }
 
+        if (art_tiny) {
+            strncpy(args->state->pending_album_ascii_tiny, art_tiny,
+                    sizeof(args->state->pending_album_ascii_tiny) - 1);
+            args->state->pending_album_ascii_tiny[sizeof(args->state->pending_album_ascii_tiny) - 1] = '\0';
+        } else {
+            args->state->pending_album_ascii_tiny[0] = '\0';
+        }
+
         args->state->art_download_complete = true;
         args->state->art_download_pending = false;
 
@@ -110,6 +127,7 @@ static void *art_download_thread(void *arg)
 
     free(art_full);
     free(art_small);
+    free(art_tiny);
     free(args);
 #ifdef _WIN32
     return 0;
@@ -202,6 +220,8 @@ static void refresh_art_for_track(player_state_t *state, int width, int height)
                                    width, height, key);
     album_art_generate_placeholder(state->album_ascii_small, sizeof(state->album_ascii_small),
                                    32, 16, key);
+    album_art_generate_placeholder(state->album_ascii_tiny, sizeof(state->album_ascii_tiny),
+                                   10, 5, key);
     state->album_width = width;
     state->album_height = height;
 }
@@ -266,6 +286,12 @@ static void check_art_download_complete(player_state_t *state)
             state->album_ascii_small[sizeof(state->album_ascii_small) - 1] = '\0';
             state->pending_album_ascii_small[0] = '\0';
         }
+        if (state->pending_album_ascii_tiny[0]) {
+            strncpy(state->album_ascii_tiny, state->pending_album_ascii_tiny,
+                    sizeof(state->album_ascii_tiny) - 1);
+            state->album_ascii_tiny[sizeof(state->album_ascii_tiny) - 1] = '\0';
+            state->pending_album_ascii_tiny[0] = '\0';
+        }
 
         state->art_download_complete = false;
         state->pending_album_ascii[0] = '\0';
@@ -321,6 +347,8 @@ void player_run(player_t *player)
                                        art_w, art_h, key);
         album_art_generate_placeholder(player->state->album_ascii_small, sizeof(player->state->album_ascii_small),
                                        32, 16, key);
+        album_art_generate_placeholder(player->state->album_ascii_tiny, sizeof(player->state->album_ascii_tiny),
+                                       10, 5, key);
     }
 
     int update_counter = 0;
@@ -362,6 +390,9 @@ void player_run(player_t *player)
                     album_art_generate_placeholder(player->state->album_ascii_small,
                                                    sizeof(player->state->album_ascii_small),
                                                    32, 16, key);
+                    album_art_generate_placeholder(player->state->album_ascii_tiny,
+                                                   sizeof(player->state->album_ascii_tiny),
+                                                   10, 5, key);
 
                     lyrics_fetch(player->state->current_track.id,
                                  player->state->current_track.name,

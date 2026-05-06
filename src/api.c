@@ -453,27 +453,27 @@ bool spotify_get_queue(spotify_api_t *api, player_state_t *state)
                 free(buf);
 
                 if (item) {
-                    const char *id = json_get_string(item, "id", "");
-                    /* Try track.name first (for nested structure), then name directly */
-                    const char *name = json_get_string(item, "name", NULL);
-                    if (!name || name[0] == '\0') {
-                        name = json_get_string(item, "track.name", NULL);
-                    }
-                    if (!name || name[0] == '\0') {
-                        name = "Unknown";
-                    }
+                    /* json_get_string returns a pointer into a single static
+                       buffer, so each call invalidates the previous result.
+                       Copy each field locally before the next lookup. */
+                    char id_buf[256] = {0};
+                    char name_buf[512] = {0};
+                    char artist_buf[512] = {0};
 
-                    /* Artist: try artists[0].name, then track.artists[0].name */
-                    const char *artist = json_get_string(item, "artists[0].name", NULL);
-                    if (!artist || artist[0] == '\0') {
-                        artist = json_get_string(item, "track.artists[0].name", NULL);
-                    }
-                    if (!artist || artist[0] == '\0') {
-                        artist = "Unknown Artist";
-                    }
+                    const char *s = json_get_string(item, "id", "");
+                    if (s) strncpy(id_buf, s, sizeof(id_buf) - 1);
 
-                    /* Only add if we have a name (valid track) */
-                    queue_add(state, id && id[0] ? id : "", name, artist);
+                    s = json_get_string(item, "name", NULL);
+                    if (!s || !s[0]) s = json_get_string(item, "track.name", NULL);
+                    if (s && s[0]) strncpy(name_buf, s, sizeof(name_buf) - 1);
+                    else           strncpy(name_buf, "Unknown", sizeof(name_buf) - 1);
+
+                    s = json_get_string(item, "artists[0].name", NULL);
+                    if (!s || !s[0]) s = json_get_string(item, "track.artists[0].name", NULL);
+                    if (s && s[0]) strncpy(artist_buf, s, sizeof(artist_buf) - 1);
+                    else           strncpy(artist_buf, "Unknown Artist", sizeof(artist_buf) - 1);
+
+                    queue_add(state, id_buf, name_buf, artist_buf);
                     json_decref(item);
                 }
 

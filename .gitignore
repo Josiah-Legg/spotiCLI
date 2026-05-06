@@ -21,6 +21,9 @@ Thumbs.db
 .spoticli/
 .env
 .env.local
+run.sh
+run.bat
+run.ps1
 
 # Temporary files
 *.tmp

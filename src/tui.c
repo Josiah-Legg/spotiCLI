@@ -139,8 +139,11 @@ static void detect_size(void)
 #else
     /* TIOCGWINSZ would be ideal; default fallback ok */
 #endif
-    if (w < 80) w = 80;
-    if (h < 24) h = 24;
+    /* Keep a small floor so the render code never divides by zero, but let
+       the actual terminal size flow through — modes.c handles small sizes
+       gracefully and shows a "too small" message below its own minimums. */
+    if (w < 20) w = 20;
+    if (h < 6)  h = 6;
     if (w > TUI_MAX_W) w = TUI_MAX_W;
     if (h > TUI_MAX_H) h = TUI_MAX_H;
     g.width = w;

@@ -103,6 +103,8 @@ typedef struct {
     int album_height;
     /* Small (32x16) variant for hybrid mode. Same source image, lower resolution. */
     char album_ascii_small[16384];
+    /* Tiny (10x5) variant for the lyrics-mode bottom strip. */
+    char album_ascii_tiny[4096];
 
     /* Async album art download state */
     char pending_cover_url[1024];
@@ -110,6 +112,7 @@ typedef struct {
     volatile bool art_download_complete;
     char pending_album_ascii[65536];
     char pending_album_ascii_small[16384];
+    char pending_album_ascii_tiny[4096];
 
 #ifdef _WIN32
     HANDLE art_mutex;

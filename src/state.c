@@ -67,6 +67,8 @@ player_state_t *player_state_init(void)
     state->pending_album_ascii[0] = '\0';
     state->album_ascii_small[0] = '\0';
     state->pending_album_ascii_small[0] = '\0';
+    state->album_ascii_tiny[0] = '\0';
+    state->pending_album_ascii_tiny[0] = '\0';
 
     return state;
 }
