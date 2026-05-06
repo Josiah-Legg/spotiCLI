@@ -1,0 +1,32 @@
+# Build artifacts
+build/
+*.o
+*.exe
+spoticli
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+*.swp
+
+# Config/credentials
+.spoticli/
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.log
+
+# Local Claude Code settings
+.claude/
+# Stray dir from a `mkdir -p` typo
+-p/
