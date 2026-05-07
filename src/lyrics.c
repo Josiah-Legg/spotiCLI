@@ -311,9 +311,11 @@ void lyrics_update_position(player_state_t *state, int progress_ms)
 {
     if (!state || state->lyrics_count == 0) return;
 
+    int adjusted_ms = progress_ms - 300;
+
     int best_idx = 0;
     for (int i = 0; i < state->lyrics_count; i++) {
-        if (state->lyrics[i].timestamp_ms <= progress_ms) {
+        if (state->lyrics[i].timestamp_ms <= adjusted_ms) {
             best_idx = i;
         } else {
             break;

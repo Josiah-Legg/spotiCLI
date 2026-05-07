@@ -47,7 +47,12 @@ bool auth_exchange_code(auth_state_t *auth, const char *code)
 {
     if (!auth || !code) return false;
 
-    /* Build the request body */
+    /* URL-encode form params (redirect_uri contains :/ and code may contain special chars) */
+    char *enc_code   = http_urlencode(code);
+    char *enc_redir  = http_urlencode(auth->redirect_uri);
+    char *enc_cid    = http_urlencode(auth->client_id);
+    char *enc_secret = http_urlencode(auth->client_secret);
+
     char body[2048];
     snprintf(body, sizeof(body),
         "grant_type=authorization_code&"
@@ -55,7 +60,15 @@ bool auth_exchange_code(auth_state_t *auth, const char *code)
         "redirect_uri=%s&"
         "client_id=%s&"
         "client_secret=%s",
-        code, auth->redirect_uri, auth->client_id, auth->client_secret);
+        enc_code   ? enc_code   : code,
+        enc_redir  ? enc_redir  : auth->redirect_uri,
+        enc_cid    ? enc_cid    : auth->client_id,
+        enc_secret ? enc_secret : auth->client_secret);
+
+    if (enc_code)   http_free_encoded(enc_code);
+    if (enc_redir)  http_free_encoded(enc_redir);
+    if (enc_cid)    http_free_encoded(enc_cid);
+    if (enc_secret) http_free_encoded(enc_secret);
 
     /* Make HTTP request */
     http_response_t *resp = http_request(
@@ -68,6 +81,7 @@ bool auth_exchange_code(auth_state_t *auth, const char *code)
 
     if (!resp || resp->status_code != 200) {
         fprintf(stderr, "Token exchange failed (status %d)\n", resp ? resp->status_code : 0);
+        if (resp && resp->body) fprintf(stderr, "Response body: %s\n", resp->body);
         if (resp) http_response_free(resp);
         return false;
     }

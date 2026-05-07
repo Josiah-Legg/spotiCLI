@@ -429,12 +429,6 @@ void player_run(player_t *player)
                 case INPUT_KEY_ESCAPE:
                     player->running = false;
                     break;
-                case INPUT_KEY_UP:
-                    player_queue_up(player);
-                    break;
-                case INPUT_KEY_DOWN:
-                    player_queue_down(player);
-                    break;
                 case INPUT_KEY_LEFT: {
                     int p = player->state->current_track.progress_ms - 5000;
                     if (p < 0) p = 0;
