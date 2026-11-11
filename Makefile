@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -std=c99 -g -O2 -D_WIN32_WINNT=0x0601
 LDFLAGS = -lm
 
 ifeq ($(OS),Windows_NT)
-LDFLAGS += -lwinhttp -lws2_32 -lshlwapi -lshell32 -lole32
+LDFLAGS += -lwinhttp -lws2_32 -lshlwapi -lshell32 -lole32 -static
 EXE = .exe
 # Use cmd.exe builtins so it works whether make is invoked from cmd or a POSIX shell
 RM = if exist "$(subst /,\,$(1))" rmdir /S /Q "$(subst /,\,$(1))"
@@ -25,6 +25,7 @@ BIN_DIR = .
 SOURCES = $(SRC_DIR)/main.c \
           $(SRC_DIR)/state.c \
           $(SRC_DIR)/auth.c \
+          $(SRC_DIR)/config.c \
           $(SRC_DIR)/api.c \
           $(SRC_DIR)/http.c \
           $(SRC_DIR)/json_util.c \
@@ -74,4 +75,23 @@ else
 	./$(TARGET)
 endif
 
-.PHONY: all clean run
+# Install so `spoticli` works from any terminal.
+#   Windows: copies to %LOCALAPPDATA%\Programs\spoticli and adds it to your user PATH.
+#   Other:   copies to ~/.local/bin (override with PREFIX=...).
+install: $(TARGET)
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Exe "$(subst /,\,$(TARGET))"
+else
+	mkdir -p "$(or $(PREFIX),$(HOME)/.local)/bin"
+	cp "$(TARGET)" "$(or $(PREFIX),$(HOME)/.local)/bin/spoticli"
+	@echo Installed to $(or $(PREFIX),$(HOME)/.local)/bin/spoticli
+endif
+
+uninstall:
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Uninstall
+else
+	rm -f "$(or $(PREFIX),$(HOME)/.local)/bin/spoticli"
+endif
+
+.PHONY: all clean run install uninstall

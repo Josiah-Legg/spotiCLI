@@ -6,37 +6,54 @@
 #include "api.h"
 #include "http.h"
 #include "player.h"
+#include "config.h"
 
-static void print_setup_message(void)
+static void print_usage(void)
 {
     fprintf(stderr,
-        "SpotiCLI requires Spotify API credentials.\n"
-        "  1. Create an app at https://developer.spotify.com/dashboard\n"
-        "  2. Add http://127.0.0.1:8888/callback as a Redirect URI\n"
-        "  3. Set environment variables:\n"
-        "       SPOTIFY_CLIENT_ID\n"
-        "       SPOTIFY_CLIENT_SECRET\n"
-        "       SPOTIFY_REDIRECT_URI (optional, default http://127.0.0.1:8888/callback)\n");
+        "Usage: spoticli [options]\n"
+        "\n"
+        "  --setup    Enter (or change) your Spotify app Client ID and secret\n"
+        "  --login    Sign in to Spotify again\n"
+        "  --help     Show this help\n"
+        "\n"
+        "Credentials are stored in %s\n"
+        "SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET / SPOTIFY_REDIRECT_URI\n"
+        "environment variables override the saved file if set.\n",
+        config_credentials_path());
+}
+
+/* Forget the cached Spotify sign-in so the browser login runs again. */
+static void clear_token(void)
+{
+    remove(auth_default_config_path());
 }
 
 int main(int argc, char **argv)
 {
+    bool force_setup = false;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--login") == 0) {
-            /* force re-auth: delete cached token */
-            FILE *f = fopen(auth_default_config_path(), "wb");
-            if (f) fclose(f);
+            clear_token();
+        } else if (strcmp(argv[i], "--setup") == 0) {
+            force_setup = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage();
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n\n", argv[i]);
+            print_usage();
+            return 1;
         }
     }
 
-    const char *client_id     = getenv("SPOTIFY_CLIENT_ID");
-    const char *client_secret = getenv("SPOTIFY_CLIENT_SECRET");
-    const char *redirect_uri  = getenv("SPOTIFY_REDIRECT_URI");
-    if (!redirect_uri) redirect_uri = "http://127.0.0.1:8888/callback";
-
-    if (!client_id || !client_secret || !client_id[0] || !client_secret[0]) {
-        print_setup_message();
-        return 1;
+    credentials_t creds;
+    bool have_creds = config_load_credentials(&creds);
+    if (force_setup || !have_creds) {
+        if (!config_run_setup(&creds))
+            return 1;
+        /* A refresh token belongs to one client id; start a fresh sign-in. */
+        clear_token();
     }
 
     http_init();
@@ -47,12 +64,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    auth_state_t *auth = auth_init(client_id, client_secret, redirect_uri);
+    auth_state_t *auth = auth_init(creds.client_id, creds.client_secret, creds.redirect_uri);
     if (!auth) { player_state_free(state); return 1; }
 
     fprintf(stderr, "SpotiCLI starting. Authenticating with Spotify...\n");
     if (!auth_perform_oauth_flow(auth)) {
-        fprintf(stderr, "[!] Auth failed. Run with --login to re-authenticate.\n");
+        fprintf(stderr,
+            "[!] Auth failed. Try `spoticli --login` to sign in again,\n"
+            "    or `spoticli --setup` if your Client ID / secret changed.\n");
         auth_free(auth); player_state_free(state); http_cleanup();
         return 1;
     }
