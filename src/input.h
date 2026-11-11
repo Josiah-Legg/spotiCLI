@@ -16,6 +16,10 @@ typedef enum {
     INPUT_KEY_RIGHT,
     INPUT_KEY_ESCAPE,
     INPUT_KEY_ENTER,
+    INPUT_KEY_BACKSPACE,
+    INPUT_KEY_TAB,
+    INPUT_KEY_SHIFT_UP,
+    INPUT_KEY_SHIFT_DOWN,
     INPUT_KEY_UNKNOWN
 } input_special_key_e;
 

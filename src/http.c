@@ -7,15 +7,8 @@
 /*
  * HTTP backend.
  *
- * - On Windows: WinHTTP (built into the OS, no extra deps).
- * - --demo / SPOTICLI_DEMO=1: returns canned JSON so the UI runs without
- *   network access.
- *
- * The demo path covers the few endpoints the player actually pokes at
- * idle. Anything else returns an empty 200 so JSON parsers don't crash.
+ * On Windows: WinHTTP (built into the OS, no extra deps).
  */
-
-static bool g_demo_mode = false;
 
 #ifdef _WIN32
 #include <windows.h>
@@ -38,22 +31,14 @@ static wchar_t *utf8_to_w(const char *s)
 
 void http_init(void)
 {
-    const char *d = getenv("SPOTICLI_DEMO");
-    if (d && (d[0] == '1' || d[0] == 't' || d[0] == 'T')) g_demo_mode = true;
-
 #ifdef _WIN32
-    if (!g_demo_mode) {
-        g_session = WinHttpOpen(L"SpotiCLI/1.0",
-                                WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                WINHTTP_NO_PROXY_NAME,
-                                WINHTTP_NO_PROXY_BYPASS, 0);
-        if (!g_session) {
-            fprintf(stderr, "[http] WinHttpOpen failed; falling back to demo\n");
-            g_demo_mode = true;
-        }
+    g_session = WinHttpOpen(L"SpotiCLI/1.0",
+                            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                            WINHTTP_NO_PROXY_NAME,
+                            WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!g_session) {
+        fprintf(stderr, "[http] WinHttpOpen failed\n");
     }
-#else
-    g_demo_mode = true;
 #endif
 }
 
@@ -63,11 +48,6 @@ void http_cleanup(void)
     if (g_session) { WinHttpCloseHandle(g_session); g_session = NULL; }
 #endif
 }
-
-void http_set_demo_mode(bool enabled) { g_demo_mode = enabled; }
-bool http_is_demo_mode(void)         { return g_demo_mode; }
-
-/* ------------------------------------------------------------------ demo  */
 
 static http_response_t *make_resp(int code, const char *body)
 {
@@ -86,39 +66,6 @@ static http_response_t *make_resp(int code, const char *body)
         r->size = 0;
     }
     return r;
-}
-
-static http_response_t *demo_response(const char *url)
-{
-    if (strstr(url, "/me/player/currently-playing")) {
-        return make_resp(200,
-            "{"
-            "\"item\":{"
-                "\"id\":\"demo-track-001\","
-                "\"name\":\"Midnight City\","
-                "\"album\":{"
-                    "\"name\":\"Hurry Up, We're Dreaming\","
-                    "\"images\":[{\"url\":\"https://i.scdn.co/image/ab67616d0000b2734f6d6e6e6e6e6e6e6e6e6e6e\"}]"
-                "},"
-                "\"artists\":[{\"name\":\"M83\"}],"
-                "\"duration_ms\":244000"
-            "},"
-            "\"progress_ms\":62000,"
-            "\"is_playing\":true"
-            "}");
-    }
-    if (strstr(url, "/me/player/queue")) {
-        return make_resp(200,
-            "{\"currently_playing\":{},"
-             "\"queue\":["
-               "{\"id\":\"track-002\",\"name\":\"We Own The Sky\",\"artists\":[{\"name\":\"M83\"}]},"
-               "{\"id\":\"track-003\",\"name\":\"Outro\",\"artists\":[{\"name\":\"M83\"}]},"
-               "{\"id\":\"track-004\",\"name\":\"Wait\",\"artists\":[{\"name\":\"M83\"}]}"
-             "]}");
-    }
-    if (strstr(url, "/search"))    return make_resp(200, "{\"tracks\":{\"items\":[]}}");
-    if (strstr(url, "/me/player")) return make_resp(204, "");
-    return make_resp(200, "{}");
 }
 
 /* ------------------------------------------------------------------ winhttp */
@@ -335,30 +282,27 @@ http_response_t *http_request(http_method_e method, const char *url,
 {
     if (!url) return NULL;
 
-    fprintf(stderr, "[http] %s %s%s\n",
+    fprintf(stderr, "[http] %s %s\n",
             method == HTTP_GET ? "GET" :
             method == HTTP_POST ? "POST" :
             method == HTTP_PUT ? "PUT" : "DEL",
-            url,
-            g_demo_mode ? "  (demo)" : "");
-
-    if (g_demo_mode) return demo_response(url);
+            url);
 
 #ifdef _WIN32
     return winhttp_request(method, url, access_token, body, content_type);
 #else
     (void)method; (void)access_token; (void)body; (void)content_type;
-    return demo_response(url);
+    return make_resp(0, "{\"error\":\"not implemented\"}");
 #endif
 }
 
 http_binary_response_t *http_download_binary(const char *url, const char *token)
 {
     if (!url) return NULL;
-    if (g_demo_mode) return NULL;
 #ifdef _WIN32
     return winhttp_download_binary(url, token);
 #else
+    (void)token;
     return NULL;
 #endif
 }

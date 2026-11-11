@@ -47,12 +47,7 @@ bool auth_exchange_code(auth_state_t *auth, const char *code)
 {
     if (!auth || !code) return false;
 
-    /* URL-encode form params (redirect_uri contains :/ and code may contain special chars) */
-    char *enc_code   = http_urlencode(code);
-    char *enc_redir  = http_urlencode(auth->redirect_uri);
-    char *enc_cid    = http_urlencode(auth->client_id);
-    char *enc_secret = http_urlencode(auth->client_secret);
-
+    /* Build the request body */
     char body[2048];
     snprintf(body, sizeof(body),
         "grant_type=authorization_code&"
@@ -60,15 +55,7 @@ bool auth_exchange_code(auth_state_t *auth, const char *code)
         "redirect_uri=%s&"
         "client_id=%s&"
         "client_secret=%s",
-        enc_code   ? enc_code   : code,
-        enc_redir  ? enc_redir  : auth->redirect_uri,
-        enc_cid    ? enc_cid    : auth->client_id,
-        enc_secret ? enc_secret : auth->client_secret);
-
-    if (enc_code)   http_free_encoded(enc_code);
-    if (enc_redir)  http_free_encoded(enc_redir);
-    if (enc_cid)    http_free_encoded(enc_cid);
-    if (enc_secret) http_free_encoded(enc_secret);
+        code, auth->redirect_uri, auth->client_id, auth->client_secret);
 
     /* Make HTTP request */
     http_response_t *resp = http_request(
@@ -81,7 +68,6 @@ bool auth_exchange_code(auth_state_t *auth, const char *code)
 
     if (!resp || resp->status_code != 200) {
         fprintf(stderr, "Token exchange failed (status %d)\n", resp ? resp->status_code : 0);
-        if (resp && resp->body) fprintf(stderr, "Response body: %s\n", resp->body);
         if (resp) http_response_free(resp);
         return false;
     }
@@ -409,7 +395,11 @@ bool auth_perform_oauth_flow(auth_state_t *auth)
     const char *scopes =
         "user-read-playback-state user-modify-playback-state "
         "user-read-currently-playing user-read-private user-read-email "
-        "playlist-read-private playlist-read-collaborative streaming";
+        "playlist-read-private playlist-read-collaborative "
+        "playlist-modify-public playlist-modify-private "
+        "user-library-read user-library-modify "
+        "user-follow-read user-follow-modify "
+        "streaming";
     char *enc_scope = http_urlencode(scopes);
     char *enc_redir = http_urlencode(auth->redirect_uri);
 

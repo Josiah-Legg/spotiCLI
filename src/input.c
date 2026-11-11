@@ -54,6 +54,12 @@ input_event_t *input_poll(void)
         case 77:
             evt.special_key = INPUT_KEY_RIGHT;
             break;
+        case 152:
+            evt.special_key = INPUT_KEY_SHIFT_UP;
+            break;
+        case 160:
+            evt.special_key = INPUT_KEY_SHIFT_DOWN;
+            break;
         default:
             evt.special_key = INPUT_KEY_UNKNOWN;
         }
@@ -63,6 +69,12 @@ input_event_t *input_poll(void)
     } else if (ch == 13) {
         evt.type = INPUT_KEY;
         evt.special_key = INPUT_KEY_ENTER;
+    } else if (ch == 8 || ch == 127) {
+        evt.type = INPUT_KEY;
+        evt.special_key = INPUT_KEY_BACKSPACE;
+    } else if (ch == 9) {
+        evt.type = INPUT_KEY;
+        evt.special_key = INPUT_KEY_TAB;
     } else if (ch == 3) {
         evt.type = INPUT_QUIT;
     } else {
@@ -159,6 +171,16 @@ input_event_t *input_poll(void)
     } else if (buf[0] == 10 || buf[0] == 13) {
         evt.type = INPUT_KEY;
         evt.special_key = INPUT_KEY_ENTER;
+        buf_idx = 0;
+        return &evt;
+    } else if (buf[0] == 8 || buf[0] == 127) {
+        evt.type = INPUT_KEY;
+        evt.special_key = INPUT_KEY_BACKSPACE;
+        buf_idx = 0;
+        return &evt;
+    } else if (buf[0] == 9) {
+        evt.type = INPUT_KEY;
+        evt.special_key = INPUT_KEY_TAB;
         buf_idx = 0;
         return &evt;
     } else if (buf_idx >= 1) {

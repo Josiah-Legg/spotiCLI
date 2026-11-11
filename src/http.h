@@ -53,8 +53,4 @@ void http_binary_response_free(http_binary_response_t *resp);
 char *http_urlencode(const char *str);
 void http_free_encoded(char *encoded);
 
-/* Demo mode controls */
-void http_set_demo_mode(bool enabled);
-bool http_is_demo_mode(void);
-
 #endif

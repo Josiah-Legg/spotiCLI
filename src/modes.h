@@ -38,4 +38,9 @@ void mode_render_progress(int y, player_state_t *state, int width);
 /* Dispatch to correct renderer based on mode */
 void mode_render(mode_renderer_t *renderer, player_state_t *state);
 
+/* Render the "Up Next" queue panel as a standalone widget. Returns the width
+   it occupied (0 if not rendered). Used by Search and Library screens to
+   share the same sidebar style as Now Playing. */
+int mode_render_queue_sidebar(player_state_t *state);
+
 #endif

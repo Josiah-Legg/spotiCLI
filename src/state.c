@@ -16,6 +16,8 @@ player_state_t *player_state_init(void)
     /* Initialize defaults */
     state->playback_state = PLAYBACK_STATE_STOPPED;
     state->display_mode = MODE_ALBUM_ART;
+    state->screen = SCREEN_NOW_PLAYING;
+    state->current_track_liked = false;
     state->repeat_mode = REPEAT_OFF;
     state->shuffle_enabled = false;
     state->volume = 50;
@@ -58,8 +60,11 @@ player_state_t *player_state_init(void)
 #ifdef _WIN32
     state->art_mutex = CreateMutex(NULL, FALSE, NULL);
     state->art_thread = NULL;
+    state->lyrics_mutex = CreateMutex(NULL, FALSE, NULL);
+    state->lyrics_thread = NULL;
 #else
     pthread_mutex_init(&state->art_mutex, NULL);
+    pthread_mutex_init(&state->lyrics_mutex, NULL);
 #endif
     state->art_download_pending = false;
     state->art_download_complete = false;
@@ -69,6 +74,19 @@ player_state_t *player_state_init(void)
     state->pending_album_ascii_small[0] = '\0';
     state->album_ascii_tiny[0] = '\0';
     state->pending_album_ascii_tiny[0] = '\0';
+
+    state->lyrics_fetch_pending = false;
+    state->lyrics_fetch_complete = false;
+    state->pending_lyrics = NULL;
+    state->pending_lyrics_count = 0;
+    state->pending_lyrics_capacity = 0;
+    state->pending_lyrics_track_id[0] = '\0';
+    state->lyrics_track_id[0] = '\0';
+
+    state->jump_in_progress = false;
+    state->jump_target_track_id[0] = '\0';
+    state->jump_saved_volume = 0;
+    state->jump_was_playing = false;
 
     return state;
 }
@@ -83,15 +101,25 @@ void player_state_free(player_state_t *state)
         CloseHandle(state->art_thread);
     }
     if (state->art_mutex) CloseHandle(state->art_mutex);
+    if (state->lyrics_thread) {
+        WaitForSingleObject(state->lyrics_thread, 1000);
+        CloseHandle(state->lyrics_thread);
+    }
+    if (state->lyrics_mutex) CloseHandle(state->lyrics_mutex);
 #else
     if (state->art_thread) {
         pthread_join(state->art_thread, NULL);
     }
     pthread_mutex_destroy(&state->art_mutex);
+    if (state->lyrics_thread) {
+        pthread_join(state->lyrics_thread, NULL);
+    }
+    pthread_mutex_destroy(&state->lyrics_mutex);
 #endif
 
     free(state->queue);
     free(state->lyrics);
+    free(state->pending_lyrics);
     free(state->devices);
     free(state);
 }
@@ -122,6 +150,7 @@ void queue_clear(player_state_t *state)
     if (!state) return;
     state->queue_size = 0;
     state->current_queue_index = 0;
+    /* Don't reset queue_sidebar_sel — it's user-driven; clamp later. */
     state->needs_redraw = true;
 }
 

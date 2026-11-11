@@ -257,50 +257,64 @@ static void render_centered_track_info(int x, int y, int w, player_state_t *stat
 
 static void render_top_bar(player_state_t *state, int width)
 {
-    /* Gradient-like header */
+    /* Background bar */
     tui_set_color_idx(C_BG, C_ACCENT_DIM);
     tui_set_attr(ATTR_BOLD);
     tui_cursor_move(0, 0);
     for (int i = 0; i < width; i++) tui_write(" ");
 
-    /* Logo: full on wide bars, shortened to "♫" only when very narrow. */
-    tui_cursor_move(2, 0);
+    /* Logo */
+    int x = 1;
+    tui_cursor_move(x, 0);
     tui_set_color_idx(C_TEXT, C_ACCENT_DIM);
-    const char *logo = (width >= 30) ? "♫ SpotiCLI" : "♫";
-    tui_write(logo);
-    int logo_end = 2 + (int)strlen(logo);
+    if (width >= 90) { tui_write("♫ SpotiCLI"); x += 11; }
+    else             { tui_write("♫");          x += 2;  }
 
-    /* Playback icon (always shown, just past the logo). */
-    tui_set_attr(ATTR_NORMAL);
-    const char *icon = state->playback_state == PLAYBACK_STATE_PLAYING ? "▶" :
-                       state->playback_state == PLAYBACK_STATE_PAUSED  ? "⏸" : "⏹";
-    if (width >= 22) {
-        tui_cursor_move(logo_end + 2, 0);
-        tui_write("• ");
-        tui_write(icon);
-    }
+    /* Tab strip */
+    const char *full[]  = { "1 Now Playing", "2 Search", "3 Library", "4 Playlists" };
+    const char *brief[] = { "1 Now",         "2 Sr",     "3 Lb",      "4 Pl" };
+    bool use_full = (width >= 80);
+    const char **labels = use_full ? full : brief;
 
-    /* Right-side status. Drop pieces as width shrinks so it never collides
-       with the logo/icon on the left. */
+    /* Right-side status */
+    const char *heart = state->current_track_liked ? "♥ " : "♡ ";
     char status[64];
-    if (width >= 50) {
-        snprintf(status, sizeof(status), "Vol %d%% %s%s",
-                 state->volume,
+    if (width >= 90) {
+        snprintf(status, sizeof(status), "%sVol %d%% %s%s",
+                 heart, state->volume,
                  state->shuffle_enabled ? "⇄" : "  ",
                  state->repeat_mode == REPEAT_OFF ? "  " :
                  state->repeat_mode == REPEAT_ALL ? "↻" : "↻¹");
-    } else if (width >= 30) {
-        snprintf(status, sizeof(status), "Vol %d%%", state->volume);
+    } else if (width >= 60) {
+        snprintf(status, sizeof(status), "%sVol %d%%", heart, state->volume);
     } else {
         status[0] = 0;
     }
+    int status_w = (int)strlen(status);
+    int right_limit = width - status_w - 2;
+
+    /* Render tabs starting after logo, gap of 2 */
+    x += 2;
+    for (int i = 0; i < 4; i++) {
+        int tab_w = (int)strlen(labels[i]) + 2;
+        if (x + tab_w > right_limit) break;
+        tui_cursor_move(x, 0);
+        if (i == (int)state->screen) {
+            tui_set_color_idx(C_BG, C_ACCENT_HI);
+            tui_set_attr(ATTR_BOLD);
+        } else {
+            tui_set_color_idx(C_TEXT, C_ACCENT_DIM);
+            tui_set_attr(ATTR_NORMAL);
+        }
+        tui_printf(" %s ", labels[i]);
+        x += tab_w + 1;
+    }
 
     if (status[0]) {
-        int sx = width - (int)strlen(status) - 2;
-        if (sx > logo_end + 6) {
-            tui_cursor_move(sx, 0);
-            tui_write(status);
-        }
+        tui_cursor_move(width - status_w - 2, 0);
+        tui_set_color_idx(C_TEXT, C_ACCENT_DIM);
+        tui_set_attr(ATTR_BOLD);
+        tui_write(status);
     }
 
     tui_reset_style();
@@ -399,10 +413,10 @@ static void render_track_block(int x, int y, int width, player_state_t *state)
 static void render_help_bar(int y, int width)
 {
     /* Pick the longest help string that fits, shortest as fallback. */
-    const char *full   = " [Space] Play/Pause  [N/P] Next/Prev  [1/2/3] Mode  [Q] Queue  [+/-] Vol  [Esc] Quit ";
-    const char *medium = " [Space] Play  [N/P] Skip  [1/2/3] Mode  [Q] Queue  [+/-] Vol  [Esc] Quit ";
-    const char *small  = " [Spc] Play  [N/P] Skip  [1/2/3] Mode  [Q] Queue  [Esc] Quit ";
-    const char *tiny   = " [Spc] [N/P] [1/2/3] [Q] [Esc] ";
+    const char *full   = " [Space] Play  [N/P] Skip  [↑↓] Sel  [Enter] Jump  [M] Mode  [L] Like  [Q] Sidebar  [1-5] Tab  [Esc] Quit ";
+    const char *medium = " [Space] Play  [N/P] Skip  [↑↓ Enter] Jump  [M] Mode  [L] Like  [1-5] Tab  [Esc] Quit ";
+    const char *small  = " [Spc] Play  [N/P] Skip  [Enter] Jump  [M] Mode  [L] Like  [Esc] Quit ";
+    const char *tiny   = " [Spc] [N/P] [M] [L] [1-5] [Esc] ";
 
     const char *pick = full;
     if ((int)strlen(full) + 2 > width)   pick = medium;
@@ -412,7 +426,7 @@ static void render_help_bar(int y, int width)
 
     tui_set_color_idx(C_TEXT_FAINT, C_BG);
     tui_set_attr(ATTR_NORMAL);
-    tui_cursor_move(1, y);
+    tui_cursor_move(2, y);
     tui_write(pick);
     tui_reset_style();
 }
@@ -512,7 +526,11 @@ static void render_queue_panel(int x, int y, int w, int h, player_state_t *state
         return;
     }
 
-    int start = state->current_queue_index - 2;
+    int sel_idx = state->queue_sidebar_sel;
+    if (sel_idx < 0) sel_idx = 0;
+    if (sel_idx >= state->queue_size) sel_idx = state->queue_size - 1;
+
+    int start = sel_idx - items / 2;
     if (start < 0) start = 0;
     if (start + items > state->queue_size) {
         start = state->queue_size - items;
@@ -522,10 +540,15 @@ static void render_queue_panel(int x, int y, int w, int h, player_state_t *state
     char line[256];
     for (int i = 0; i < items && start + i < state->queue_size; i++) {
         int idx = start + i;
-        bool sel = idx == state->current_queue_index;
+        bool sel  = (idx == sel_idx);
+        bool now  = (idx == state->current_queue_index);
         tui_cursor_move(inner_x, inner_y + i);
 
         if (sel) {
+            tui_set_color_idx(C_BG, C_ACCENT);
+            tui_set_attr(ATTR_BOLD);
+            tui_write(now ? "▶ " : "> ");
+        } else if (now) {
             tui_set_color_idx(C_ACCENT, C_BG);
             tui_set_attr(ATTR_BOLD);
             tui_write("▶ ");
@@ -535,8 +558,13 @@ static void render_queue_panel(int x, int y, int w, int h, player_state_t *state
             tui_printf("%2d ", idx + 1);
         }
 
-        tui_set_color_idx(sel ? C_TEXT_BRIGHT : C_TEXT_DIM, C_BG);
-        tui_set_attr(sel ? ATTR_BOLD : ATTR_NORMAL);
+        if (sel) {
+            tui_set_color_idx(C_BG, C_ACCENT);
+            tui_set_attr(ATTR_BOLD);
+        } else {
+            tui_set_color_idx(now ? C_TEXT_BRIGHT : C_TEXT_DIM, C_BG);
+            tui_set_attr(now ? ATTR_BOLD : ATTR_NORMAL);
+        }
 
         /* Show track name - artist format */
         char track_info[512];
@@ -943,10 +971,33 @@ void mode_render_lyrics(mode_renderer_t *r, player_state_t *state)
 }
 
 /* Legacy API */
+int mode_render_queue_sidebar(player_state_t *state)
+{
+    if (!state) return 0;
+    int W, H;
+    tui_get_size(&W, &H);
+    int q_w = responsive_queue_w(W, state->queue_sidebar_visible);
+    if (q_w <= 0) return 0;
+    /* Sit below the tab strip and above the footer hint. */
+    int q_x = W - q_w;
+    int q_y = 2;
+    int q_h = H - q_y - 2;
+    if (q_h < 5) return 0;
+    render_queue_panel(q_x, q_y, q_w, q_h, state);
+    return q_w;
+}
+
 void mode_render_header(player_state_t *state) {
     int w, h;
     tui_get_size(&w, &h);
     render_top_bar(state, w);
+    /* Wipe rows 1-4 so stale pane headers (e.g. "Tracks (0)") from the
+       Playlists screen don't persist when switching to Search/Library. */
+    tui_reset_style();
+    for (int y = 1; y < 5 && y < h - 1; y++) {
+        tui_cursor_move(0, y);
+        for (int x = 0; x < w; x++) tui_write(" ");
+    }
 }
 
 void mode_render_controls(int y, player_state_t *state) {

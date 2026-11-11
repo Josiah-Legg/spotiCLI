@@ -34,6 +34,10 @@ SOURCES = $(SRC_DIR)/main.c \
           $(SRC_DIR)/modes.c \
           $(SRC_DIR)/queue_widget.c \
           $(SRC_DIR)/search.c \
+          $(SRC_DIR)/library.c \
+          $(SRC_DIR)/playlists_ui.c \
+          $(SRC_DIR)/queue_screen.c \
+          $(SRC_DIR)/modal.c \
           $(SRC_DIR)/settings.c \
           $(SRC_DIR)/input.c \
           $(SRC_DIR)/player.c

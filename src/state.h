@@ -37,12 +37,21 @@ typedef enum {
     PLAYBACK_STATE_STOPPED
 } playback_state_e;
 
-/* Display modes */
+/* Display modes (within Now Playing) */
 typedef enum {
     MODE_ALBUM_ART,
     MODE_HYBRID,
     MODE_LYRICS
 } display_mode_e;
+
+/* Top-level screens (tabs) */
+typedef enum {
+    SCREEN_NOW_PLAYING,
+    SCREEN_SEARCH,
+    SCREEN_LIBRARY,
+    SCREEN_PLAYLISTS,
+    SCREEN_QUEUE
+} screen_e;
 
 /* Repeat modes */
 typedef enum {
@@ -67,14 +76,17 @@ typedef struct {
 /* Player context */
 typedef struct {
     track_t current_track;
+    bool current_track_liked;
     playback_state_e playback_state;
     display_mode_e display_mode;
+    screen_e screen;
     
     /* Queue */
     queue_item_t *queue;
     int queue_size;
     int queue_capacity;
     int current_queue_index;
+    int queue_sidebar_sel;     /* user-driven highlight; survives queue refresh */
     
     /* Lyrics */
     lyric_line_t *lyrics;
@@ -114,12 +126,40 @@ typedef struct {
     char pending_album_ascii_small[16384];
     char pending_album_ascii_tiny[4096];
 
+    /* Async lyrics fetch state. The worker thread builds a heap-allocated
+       lyrics array and hands it off via pending_lyrics_*; the main thread
+       swaps it into state->lyrics on the next render tick. */
+    volatile bool lyrics_fetch_pending;
+    volatile bool lyrics_fetch_complete;
+    lyric_line_t *pending_lyrics;
+    int pending_lyrics_count;
+    int pending_lyrics_capacity;
+    /* Track id the in-flight / just-completed fetch is for. Used to drop
+       results that arrive after the user has already jumped to a different
+       song (e.g. via the Up Next list). */
+    char pending_lyrics_track_id[256];
+    /* Track id whose lyrics are currently loaded into state->lyrics. */
+    char lyrics_track_id[256];
+
+    /* Up Next jump-in-progress: while we're calling spotify_next() N times to
+       reach a song the user picked, we mute output (set volume to 0) so the
+       skipped tracks aren't briefly heard, then restore the saved volume once
+       the target track id appears in current_track. */
+    bool jump_in_progress;
+    char jump_target_track_id[256];
+    int  jump_saved_volume;
+    bool jump_was_playing;
+
 #ifdef _WIN32
     HANDLE art_mutex;
     HANDLE art_thread;
+    HANDLE lyrics_mutex;
+    HANDLE lyrics_thread;
 #else
     pthread_mutex_t art_mutex;
     pthread_t art_thread;
+    pthread_mutex_t lyrics_mutex;
+    pthread_t lyrics_thread;
 #endif
 } player_state_t;
 
